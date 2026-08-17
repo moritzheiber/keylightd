@@ -1,0 +1,34 @@
+.TH KEYLIGHTD 1 "August 2026" "keylightd 0.1.0" "User Commands"
+.SH NAME
+keylightd \- control an Elgato Key Light from camera activity
+.SH SYNOPSIS
+.B keylightd
+.I COMMAND
+.SH DESCRIPTION
+.B keylightd
+detects completed V4L2 camera frames, turns on an Elgato Key Light, and restores its previous power and brightness state after capture stops.
+.SH COMMANDS
+.TP
+.B daemon
+Run the per-user Key Light controller.
+.TP
+.B camera-monitor
+Run the privileged V4L2 frame monitor.
+.TP
+.B discover
+Discover the Key Light and print its state.
+.TP
+.B sensor
+Print the ambient-light reading.
+.TP
+.B calibrate
+Save an ambient-light to brightness calibration point.
+.SH FILES
+.TP
+.I ~/.config/keylightd/config.toml
+Per-user configuration.
+.TP
+.I /run/keylightd/camera-active
+Camera state published by the privileged monitor.
+.SH SEE ALSO
+.BR systemctl (1)

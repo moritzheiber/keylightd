@@ -1,0 +1,5 @@
+.deb-build.*
+.git
+.github
+dist
+target

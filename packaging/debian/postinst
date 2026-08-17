@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = "configure" ] || [ "${1:-}" = "abort-upgrade" ] ||
+    [ "${1:-}" = "abort-deconfigure" ] || [ "${1:-}" = "abort-remove" ]; then
+    deb-systemd-helper unmask keylightd-camera.service >/dev/null || true
+    if deb-systemd-helper --quiet was-enabled keylightd-camera.service; then
+        deb-systemd-helper enable keylightd-camera.service >/dev/null || true
+    else
+        deb-systemd-helper update-state keylightd-camera.service >/dev/null || true
+    fi
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+        deb-systemd-invoke start keylightd-camera.service >/dev/null || true
+    fi
+fi

@@ -1,0 +1,22 @@
+[package]
+name = "keylightd"
+version = "0.1.0"
+edition = "2024"
+authors = ["Moritz Heiber <moritz@heiber.im>"]
+description = "Automatic Elgato Key Light control based on camera activity and ambient light"
+repository = "https://github.com/moritzheiber/keylightd"
+homepage = "https://github.com/moritzheiber/keylightd"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+ctrlc = "3.5.2"
+libc = "0.2.189"
+mdns-sd = "0.21.0"
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.4"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

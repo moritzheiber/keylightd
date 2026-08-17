@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = "purge" ]; then
+    deb-systemd-helper purge keylightd-camera.service >/dev/null || true
+fi

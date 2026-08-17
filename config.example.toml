@@ -1,0 +1,17 @@
+[light]
+# Used only if mDNS discovery fails. A bare IP defaults to port 9123.
+# address = "192.0.2.10"
+discovery_timeout_seconds = 3
+
+[camera]
+state_file = "/run/keylightd/camera-active"
+poll_interval_ms = 250
+restore_grace_seconds = 5
+
+[ambient]
+# sensor_path = "/sys/bus/iio/devices/iio:device0/in_illuminance_input"
+
+# Added by `keylightd calibrate`:
+# [[ambient.calibration]]
+# lux = 10.0
+# brightness = 20
