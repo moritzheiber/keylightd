@@ -2,6 +2,8 @@
 
 Turns an Elgato Key Light on when any V4L2 camera produces frames, chooses brightness from ambient-light calibration, and restores the previous power and brightness state five seconds after capture stops.
 
+See [SPEC.md](SPEC.md) for behavioral decisions, architecture, edge cases, and extension guidance.
+
 ## Install
 
 Download the package for your architecture from a GitHub release, then install it:
@@ -15,7 +17,7 @@ systemctl --user enable --now keylightd.service
 
 The package enables the privileged camera service. The user service is enabled separately for the desired graphical account.
 
-The privileged service reads only the kernel V4L2 dequeue tracepoint and publishes `active` or `inactive` under `/run/keylightd`. The user service owns Key Light discovery and control.
+The privileged service reads only the kernel V4L2 dequeue tracepoint and publishes a heartbeat plus per-camera frame state under `/run/keylightd`. The user service owns device selection, Key Light control, and restoration.
 
 ## Build a package
 
@@ -30,8 +32,8 @@ Use `--architecture arm64` to cross-compile an arm64 package. Pushing a tag matc
 
 ## Configure
 
-`keylightd discover` verifies mDNS discovery and the local Elgato API. If discovery fails, set `light.address` to the light's IP address.
+Use `keylightd lights list` and `keylightd lights select` to choose one or more lights. Use `keylightd cameras list` and `keylightd cameras select` to restrict camera activation. Without an explicit camera selection, all detected capture cameras are included.
 
 `keylightd sensor` prints the current IIO ambient-light reading. Run `keylightd calibrate` under several lighting conditions to save lux-to-brightness points; intermediate values are linearly interpolated. Without a sensor or calibration, camera activation preserves the Key Light's existing brightness.
 
-Set `RUST_LOG=keylightd=debug` for additional journal output.
+Run `keylightd reload` after editing configuration. Set `RUST_LOG=keylightd=debug` for additional journal output.

@@ -40,10 +40,17 @@ impl AmbientSensor {
     pub fn read_lux(&self) -> Result<f64> {
         let value = fs::read_to_string(&self.path)
             .with_context(|| format!("read ambient sensor {}", self.path.display()))?;
-        value
+        let lux = value
             .trim()
             .parse::<f64>()
-            .with_context(|| format!("parse ambient sensor {}", self.path.display()))
+            .with_context(|| format!("parse ambient sensor {}", self.path.display()))?;
+        if !lux.is_finite() || lux < 0.0 {
+            bail!(
+                "ambient sensor {} returned invalid lux value {lux}",
+                self.path.display()
+            );
+        }
+        Ok(lux)
     }
 }
 

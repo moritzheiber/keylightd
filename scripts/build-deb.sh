@@ -76,7 +76,7 @@ if ! docker buildx version >/dev/null 2>&1; then
     exit 1
 fi
 
-source_date_epoch="${SOURCE_DATE_EPOCH:-$(git -C "$root" log -1 --format=%ct 2>/dev/null || date +%s)}"
+source_date_epoch="${SOURCE_DATE_EPOCH:-$(git -C "$root" --no-pager show -s --no-show-signature --format=%ct HEAD 2>/dev/null || date +%s)}"
 mkdir -p "$output_dir"
 output_dir="$(cd -- "$output_dir" && pwd)"
 

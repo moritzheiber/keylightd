@@ -1,4 +1,4 @@
-.TH KEYLIGHTD 1 "August 2026" "keylightd 0.1.0" "User Commands"
+.TH KEYLIGHTD 1 "August 2026" "keylightd" "User Commands"
 .SH NAME
 keylightd \- control an Elgato Key Light from camera activity
 .SH SYNOPSIS
@@ -23,12 +23,21 @@ Print the ambient-light reading.
 .TP
 .B calibrate
 Save an ambient-light to brightness calibration point.
+.TP
+.B "lights list | lights select"
+List or select physical Key Lights.
+.TP
+.B "cameras list | cameras select"
+List or select physical cameras.
+.TP
+.B reload
+Reload the running user daemon configuration.
 .SH FILES
 .TP
 .I ~/.config/keylightd/config.toml
 Per-user configuration.
 .TP
-.I /run/keylightd/camera-active
+.I /run/keylightd/camera-state.json
 Camera state published by the privileged monitor.
 .SH SEE ALSO
 .BR systemctl (1)

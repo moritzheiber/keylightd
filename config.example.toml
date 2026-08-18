@@ -1,12 +1,27 @@
 [light]
-# Used only if mDNS discovery fails. A bare IP defaults to port 9123.
+# Legacy fallback used only while automatically migrating a single discovered light.
 # address = "192.0.2.10"
 discovery_timeout_seconds = 3
 
+# Added by `keylightd lights select`:
+# [[light.selected]]
+# id = "serial:A2UTB32614EYQG"
+# name = "Elgato Key Light MK.2"
+# service_name = "Elgato Key Light._elg._tcp.local."
+# fallback_address = "http://192.0.2.10:9123"
+
 [camera]
-state_file = "/run/keylightd/camera-active"
+state_file = "/run/keylightd/camera-state.json"
 poll_interval_ms = 250
 restore_grace_seconds = 5
+helper_stale_seconds = 3
+default_inactive_seconds = 5
+
+# Added by `keylightd cameras select`:
+# [[camera.selected]]
+# id = "serial:046d_MX_Brio_2403LZ53W2R8"
+# name = "MX Brio"
+# inactive_seconds = 5
 
 [ambient]
 # sensor_path = "/sys/bus/iio/devices/iio:device0/in_illuminance_input"

@@ -9,7 +9,24 @@ if [ "${1:-}" = "configure" ] || [ "${1:-}" = "abort-upgrade" ] ||
     else
         deb-systemd-helper update-state keylightd-camera.service >/dev/null || true
     fi
+
+    if [ -z "${DPKG_ROOT:-}" ]; then
+        deb-systemd-helper --user unmask keylightd.service >/dev/null || true
+        if deb-systemd-helper --quiet --user was-enabled keylightd.service; then
+            deb-systemd-helper --user enable keylightd.service >/dev/null || true
+        else
+            deb-systemd-helper --user update-state keylightd.service >/dev/null || true
+        fi
+    fi
+
     if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
-        deb-systemd-invoke start keylightd-camera.service >/dev/null || true
+        systemctl --system daemon-reload >/dev/null || true
+        if [ -n "${2:-}" ]; then
+            deb-systemd-invoke restart keylightd-camera.service >/dev/null || true
+        else
+            deb-systemd-invoke start keylightd-camera.service >/dev/null || true
+        fi
+        deb-systemd-invoke --user daemon-reload >/dev/null || true
+        deb-systemd-invoke --user restart keylightd.service >/dev/null || true
     fi
 fi

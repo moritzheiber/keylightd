@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, HashSet};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
@@ -5,21 +6,33 @@ use anyhow::{Context, Result, bail};
 use mdns_sd::{ScopedIp, ServiceDaemon, ServiceEvent};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::info;
 
-use crate::config::LightConfig;
+use crate::config::{LightConfig, SelectedLight};
+use crate::domain::LogicalLightState;
 
 const SERVICE_TYPE: &str = "_elg._tcp.local.";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LightState {
-    pub on: bool,
-    pub brightness: u8,
+#[derive(Clone, Debug)]
+pub struct DiscoveredLight {
+    pub id: String,
+    pub name: String,
+    pub service_name: Option<String>,
+    pub endpoint: String,
 }
 
 pub struct KeyLight {
-    endpoint: String,
+    discovered: DiscoveredLight,
     client: Client,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessoryInfo {
+    product_name: String,
+    serial_number: String,
+    mac_address: String,
+    display_name: String,
 }
 
 #[derive(Deserialize)]
@@ -27,7 +40,7 @@ struct LightsResponse {
     lights: Vec<ApiLight>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct ApiLight {
     on: u8,
     brightness: u8,
@@ -36,110 +49,256 @@ struct ApiLight {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LightsUpdate {
-    number_of_lights: u8,
+    number_of_lights: usize,
     lights: Vec<ApiLight>,
 }
 
 impl KeyLight {
-    pub fn connect(config: &LightConfig) -> Result<Self> {
-        let endpoint = match discover(config.discovery_timeout_seconds) {
-            Ok(endpoint) => endpoint,
-            Err(error) => {
-                let Some(address) = config.address.as_deref() else {
-                    return Err(error).context(
-                        "Key Light mDNS discovery failed; set light.address to its IP or host:port",
-                    );
-                };
-                debug!(%error, address, "using configured Key Light address");
-                normalize_endpoint(address)
-            }
-        };
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(2))
-            .timeout(Duration::from_secs(3))
-            .build()
-            .context("build Key Light HTTP client")?;
-        Ok(Self { endpoint, client })
+    pub fn connect(discovered: DiscoveredLight) -> Result<Self> {
+        let client = http_client()?;
+        Ok(Self { discovered, client })
     }
 
-    pub fn endpoint(&self) -> &str {
-        &self.endpoint
+    pub fn discovered(&self) -> &DiscoveredLight {
+        &self.discovered
     }
 
-    pub fn state(&self) -> Result<LightState> {
+    pub fn states(&self) -> Result<Vec<LogicalLightState>> {
         let response = self
             .client
-            .get(format!("{}/elgato/lights", self.endpoint))
+            .get(format!("{}/elgato/lights", self.discovered.endpoint))
             .send()
-            .context("query Key Light")?
+            .with_context(|| format!("query Key Light {}", self.discovered.id))?
             .error_for_status()
             .context("Key Light returned an error")?
             .json::<LightsResponse>()
             .context("decode Key Light response")?;
-        let light = response
+        if response.lights.is_empty() {
+            bail!(
+                "Key Light {} returned no logical lights",
+                self.discovered.id
+            );
+        }
+        Ok(response
             .lights
-            .first()
-            .context("Key Light response is empty")?;
-        Ok(LightState {
-            on: light.on != 0,
-            brightness: light.brightness,
-        })
+            .into_iter()
+            .map(|light| LogicalLightState {
+                on: light.on != 0,
+                brightness: light.brightness,
+            })
+            .collect())
     }
 
-    pub fn set_power_brightness(&self, on: bool, brightness: u8) -> Result<()> {
-        if !(1..=100).contains(&brightness) {
+    pub fn set_states(&self, states: &[LogicalLightState]) -> Result<()> {
+        if states.is_empty() {
+            bail!("cannot apply an empty logical light state");
+        }
+        if states
+            .iter()
+            .any(|state| !(1..=100).contains(&state.brightness))
+        {
             bail!("brightness must be between 1 and 100");
         }
         let update = LightsUpdate {
-            number_of_lights: 1,
-            lights: vec![ApiLight {
-                on: u8::from(on),
-                brightness,
-            }],
+            number_of_lights: states.len(),
+            lights: states
+                .iter()
+                .map(|state| ApiLight {
+                    on: u8::from(state.on),
+                    brightness: state.brightness,
+                })
+                .collect(),
         };
         self.client
-            .put(format!("{}/elgato/lights", self.endpoint))
+            .put(format!("{}/elgato/lights", self.discovered.endpoint))
             .json(&update)
             .send()
-            .context("update Key Light")?
+            .with_context(|| format!("update Key Light {}", self.discovered.id))?
             .error_for_status()
             .context("Key Light returned an error")?;
         info!(
-            on,
-            brightness,
-            endpoint = self.endpoint,
+            light_id = self.discovered.id,
+            logical_lights = states.len(),
             "updated Key Light"
         );
         Ok(())
     }
 }
 
-fn discover(timeout_seconds: u64) -> Result<String> {
+pub fn discover_all(timeout_seconds: u64) -> Result<Vec<DiscoveredLight>> {
     let daemon = ServiceDaemon::new().context("start mDNS discovery")?;
     let receiver = daemon
         .browse(SERVICE_TYPE)
-        .context("browse for Key Light")?;
+        .context("browse for Key Lights")?;
     let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
-    let result = loop {
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-            break None;
-        };
+    let client = http_client()?;
+    let mut endpoints = BTreeMap::new();
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
         match receiver.recv_timeout(remaining) {
             Ok(ServiceEvent::ServiceResolved(info)) => {
-                let address = preferred_address(info.get_addresses());
-                if let Some(address) = address {
-                    break Some(format!("http://{address}:{}", info.get_port()));
+                if let Some(address) = preferred_address(info.get_addresses()) {
+                    endpoints.insert(
+                        info.get_fullname().to_owned(),
+                        format!("http://{address}:{}", info.get_port()),
+                    );
                 }
             }
             Ok(_) => {}
-            Err(_) => break None,
+            Err(_) => break,
         }
-    };
+    }
     daemon.shutdown().context("stop mDNS discovery")?;
-    result.context("no Elgato Key Light found through mDNS")
+
+    let mut lights = Vec::new();
+    let mut identities = HashSet::new();
+    for (service_name, endpoint) in endpoints {
+        match identify_endpoint(&client, &endpoint, Some(service_name)) {
+            Ok(light) if identities.insert(light.id.clone()) => lights.push(light),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, endpoint, "ignored unidentified Elgato service");
+            }
+        }
+    }
+    lights.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+    Ok(lights)
 }
 
-fn preferred_address(addresses: &std::collections::HashSet<ScopedIp>) -> Option<IpAddr> {
+pub fn resolve_selected(
+    config: &LightConfig,
+    selected: &[SelectedLight],
+) -> Vec<(SelectedLight, Result<KeyLight>)> {
+    if selected.is_empty() {
+        return Vec::new();
+    }
+    let client = match http_client() {
+        Ok(client) => client,
+        Err(error) => {
+            return selected
+                .iter()
+                .cloned()
+                .map(|selection| {
+                    (
+                        selection,
+                        Err(anyhow::anyhow!("build Key Light client: {error}")),
+                    )
+                })
+                .collect();
+        }
+    };
+    let mut results = Vec::new();
+    let mut unresolved = Vec::new();
+    for selection in selected.iter().cloned() {
+        let resolved = selection
+            .fallback_address
+            .as_deref()
+            .map(|address| {
+                let endpoint = normalize_endpoint(address);
+                let light = identify_endpoint(&client, &endpoint, selection.service_name.clone())?;
+                if light.id != selection.id {
+                    bail!(
+                        "fallback for {} resolved to different light {}",
+                        selection.id,
+                        light.id
+                    );
+                }
+                KeyLight::connect(light)
+            })
+            .transpose();
+        match resolved {
+            Ok(Some(light)) => results.push((selection, Ok(light))),
+            Ok(None) => unresolved.push(selection),
+            Err(error) => {
+                tracing::debug!(
+                    %error,
+                    light_id = selection.id,
+                    "Key Light fallback failed; trying mDNS"
+                );
+                unresolved.push(selection);
+            }
+        }
+    }
+    if unresolved.is_empty() {
+        return results;
+    }
+    let discovered = discover_all(config.discovery_timeout_seconds).unwrap_or_else(|error| {
+        tracing::warn!(%error, "Key Light discovery failed");
+        Vec::new()
+    });
+    results.extend(unresolved.into_iter().map(|selection| {
+        let resolved = discovered
+            .iter()
+            .find(|light| light.id == selection.id)
+            .cloned()
+            .map(KeyLight::connect)
+            .unwrap_or_else(|| {
+                Err(anyhow::anyhow!(
+                    "selected Key Light {} is unreachable",
+                    selection.id
+                ))
+            });
+        (selection, resolved)
+    }));
+    results.sort_by_key(|(selection, _)| {
+        selected
+            .iter()
+            .position(|configured| configured.id == selection.id)
+            .unwrap_or(usize::MAX)
+    });
+    results
+}
+
+pub fn selected_from_discovered(light: &DiscoveredLight) -> SelectedLight {
+    SelectedLight {
+        id: light.id.clone(),
+        name: light.name.clone(),
+        service_name: light.service_name.clone(),
+        fallback_address: Some(light.endpoint.clone()),
+    }
+}
+
+fn identify_endpoint(
+    client: &Client,
+    endpoint: &str,
+    service_name: Option<String>,
+) -> Result<DiscoveredLight> {
+    let info = client
+        .get(format!("{endpoint}/elgato/accessory-info"))
+        .send()
+        .with_context(|| format!("query accessory info at {endpoint}"))?
+        .error_for_status()
+        .context("accessory-info returned an error")?
+        .json::<AccessoryInfo>()
+        .context("decode accessory-info")?;
+    let id = if !info.serial_number.trim().is_empty() {
+        format!("serial:{}", info.serial_number)
+    } else if !info.mac_address.trim().is_empty() {
+        format!("mac:{}", info.mac_address.to_ascii_uppercase())
+    } else {
+        bail!("accessory-info at {endpoint} has no stable hardware identity");
+    };
+    let name = if info.display_name.trim().is_empty() {
+        info.product_name
+    } else {
+        info.display_name
+    };
+    Ok(DiscoveredLight {
+        id,
+        name,
+        service_name,
+        endpoint: endpoint.to_owned(),
+    })
+}
+
+fn http_client() -> Result<Client> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(3))
+        .build()
+        .context("build Key Light HTTP client")
+}
+
+fn preferred_address(addresses: &HashSet<ScopedIp>) -> Option<IpAddr> {
     addresses
         .iter()
         .find(|address| address.is_ipv4())
@@ -168,9 +327,20 @@ mod tests {
             normalize_endpoint("192.0.2.1:9123"),
             "http://192.0.2.1:9123"
         );
+    }
+
+    #[test]
+    fn selected_light_retains_stable_identity_and_resolution_hints() {
+        let selected = selected_from_discovered(&DiscoveredLight {
+            id: "serial:one".to_owned(),
+            name: "Desk".to_owned(),
+            service_name: Some("Desk._elg._tcp.local.".to_owned()),
+            endpoint: "http://192.0.2.1:9123".to_owned(),
+        });
+        assert_eq!(selected.id, "serial:one");
         assert_eq!(
-            normalize_endpoint("http://keylight.local:9123/"),
-            "http://keylight.local:9123"
+            selected.fallback_address.as_deref(),
+            Some("http://192.0.2.1:9123")
         );
     }
 }

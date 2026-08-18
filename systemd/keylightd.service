@@ -9,6 +9,7 @@ Type=simple
 ExecStart=/usr/bin/keylightd daemon
 Restart=on-failure
 RestartSec=2
+TimeoutStopSec=90
 
 [Install]
 WantedBy=default.target

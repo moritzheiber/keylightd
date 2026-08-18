@@ -58,6 +58,7 @@ install -Dm 0644 "$root/systemd/keylightd.service" \
 install -Dm 0644 "$root/config.example.toml" \
     "$staging/usr/share/doc/keylightd/config.example.toml"
 install -Dm 0644 "$root/README.md" "$staging/usr/share/doc/keylightd/README.md"
+install -Dm 0644 "$root/SPEC.md" "$staging/usr/share/doc/keylightd/SPEC.md"
 install -Dm 0644 "$root/packaging/debian/copyright" \
     "$staging/usr/share/doc/keylightd/copyright"
 install -Dm 0644 "$root/packaging/debian/lintian-overrides" \
