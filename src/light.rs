@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use mdns_sd::{ScopedIp, ServiceDaemon, ServiceEvent};
-use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use tracing::info;
+use ureq::Agent;
 
 use crate::config::{LightConfig, SelectedLight};
 use crate::domain::LogicalLightState;
@@ -23,7 +23,7 @@ pub struct DiscoveredLight {
 
 pub struct KeyLight {
     discovered: DiscoveredLight,
-    client: Client,
+    client: Agent,
 }
 
 #[derive(Deserialize)]
@@ -55,7 +55,7 @@ struct LightsUpdate {
 
 impl KeyLight {
     pub fn connect(discovered: DiscoveredLight) -> Result<Self> {
-        let client = http_client()?;
+        let client = http_client();
         Ok(Self { discovered, client })
     }
 
@@ -67,11 +67,10 @@ impl KeyLight {
         let response = self
             .client
             .get(format!("{}/elgato/lights", self.discovered.endpoint))
-            .send()
+            .call()
             .with_context(|| format!("query Key Light {}", self.discovered.id))?
-            .error_for_status()
-            .context("Key Light returned an error")?
-            .json::<LightsResponse>()
+            .body_mut()
+            .read_json::<LightsResponse>()
             .context("decode Key Light response")?;
         if response.lights.is_empty() {
             bail!(
@@ -111,11 +110,8 @@ impl KeyLight {
         };
         self.client
             .put(format!("{}/elgato/lights", self.discovered.endpoint))
-            .json(&update)
-            .send()
-            .with_context(|| format!("update Key Light {}", self.discovered.id))?
-            .error_for_status()
-            .context("Key Light returned an error")?;
+            .send_json(&update)
+            .with_context(|| format!("update Key Light {}", self.discovered.id))?;
         info!(
             light_id = self.discovered.id,
             logical_lights = states.len(),
@@ -131,7 +127,7 @@ pub fn discover_all(timeout_seconds: u64) -> Result<Vec<DiscoveredLight>> {
         .browse(SERVICE_TYPE)
         .context("browse for Key Lights")?;
     let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
-    let client = http_client()?;
+    let client = http_client();
     let mut endpoints = BTreeMap::new();
     while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
         match receiver.recv_timeout(remaining) {
@@ -171,21 +167,7 @@ pub fn resolve_selected(
     if selected.is_empty() {
         return Vec::new();
     }
-    let client = match http_client() {
-        Ok(client) => client,
-        Err(error) => {
-            return selected
-                .iter()
-                .cloned()
-                .map(|selection| {
-                    (
-                        selection,
-                        Err(anyhow::anyhow!("build Key Light client: {error}")),
-                    )
-                })
-                .collect();
-        }
-    };
+    let client = http_client();
     let mut results = Vec::new();
     let mut unresolved = Vec::new();
     for selection in selected.iter().cloned() {
@@ -258,17 +240,16 @@ pub fn selected_from_discovered(light: &DiscoveredLight) -> SelectedLight {
 }
 
 fn identify_endpoint(
-    client: &Client,
+    client: &Agent,
     endpoint: &str,
     service_name: Option<String>,
 ) -> Result<DiscoveredLight> {
     let info = client
         .get(format!("{endpoint}/elgato/accessory-info"))
-        .send()
+        .call()
         .with_context(|| format!("query accessory info at {endpoint}"))?
-        .error_for_status()
-        .context("accessory-info returned an error")?
-        .json::<AccessoryInfo>()
+        .body_mut()
+        .read_json::<AccessoryInfo>()
         .context("decode accessory-info")?;
     let id = if !info.serial_number.trim().is_empty() {
         format!("serial:{}", info.serial_number)
@@ -290,12 +271,12 @@ fn identify_endpoint(
     })
 }
 
-fn http_client() -> Result<Client> {
-    Client::builder()
-        .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(3))
+fn http_client() -> Agent {
+    Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(2)))
+        .timeout_global(Some(Duration::from_secs(3)))
         .build()
-        .context("build Key Light HTTP client")
+        .into()
 }
 
 fn preferred_address(addresses: &HashSet<ScopedIp>) -> Option<IpAddr> {

@@ -41,3 +41,7 @@ Use `keylightd lights list` and `keylightd lights select` to choose one or more 
 `keylightd sensor` prints the current IIO ambient-light reading. Run `keylightd calibrate` under several lighting conditions to save lux-to-brightness points; intermediate values are linearly interpolated. Without a sensor or calibration, camera activation preserves the Key Light's existing brightness.
 
 Run `keylightd reload` after editing configuration. Set `RUST_LOG=keylightd=debug` for additional journal output.
+
+## Limitations
+
+Key Lights are controlled over the unencrypted Elgato local API on port `9123`. No TLS backend is compiled in, so only `http://` endpoints work; `https://` endpoints are rejected. This matches the devices, which expose no HTTPS listener, and keeps the release binary small by avoiding an asynchronous runtime and bundled cryptography libraries.

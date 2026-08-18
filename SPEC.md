@@ -66,6 +66,12 @@ The preferred identity is the serial number returned by `/elgato/accessory-info`
 
 A physical device may return multiple entries from `/elgato/lights`. Power and brightness are captured, overridden, and restored for every entry independently.
 
+### Key Light transport
+
+The Elgato local API is unencrypted HTTP on port `9123`. Control uses a blocking `ureq` client with a two-second connect timeout and a three-second global timeout: `GET /elgato/accessory-info` for identity, `GET /elgato/lights` for state, and `PUT /elgato/lights` to apply state. Non-2xx responses are treated as errors.
+
+Only plaintext HTTP is supported. No TLS backend is compiled in, so `https://` endpoints are rejected at request time. This is deliberate: the devices expose no HTTPS listener, and omitting TLS removes the asynchronous runtime and bundled cryptography libraries that a general-purpose HTTP client would otherwise pull in.
+
 ### Camera session
 
 A session begins when any included camera has a recent completed frame. For fresh helper state, it ends when the larger of the camera inactivity timeout and restoration grace has elapsed since the final frame.
@@ -259,6 +265,8 @@ The Debian package:
 
 Maintainer scripts follow the debhelper `dh_installsystemd` conventions. `deb-systemd-helper` manages enable, disable, and purge state; `deb-systemd-invoke` starts, stops, and restarts units; `systemctl --system daemon-reload` reloads the system manager. User-scoped actions run only when `DPKG_ROOT` is unset and are dispatched to each running `user@<uid>` manager through `deb-systemd-invoke --user`.
 
+The release profile is tuned for binary size: `opt-level = "z"`, fat LTO, a single codegen unit, `panic = "abort"`, and symbol stripping. Combined with the plaintext-HTTP transport, this keeps the stripped binary small enough that no separate packaging strip step is required.
+
 ## Extension rules
 
 - Keep frame observation privileged and all policy unprivileged.
@@ -269,6 +277,7 @@ Maintainer scripts follow the debhelper `dh_installsystemd` conventions. `deb-sy
 - Reject invalid configuration rather than partially applying it.
 - Preserve independent retry and ownership per physical light.
 - Treat camera contents as out of scope; only trace metadata may be consumed.
+- Keep the Key Light transport blocking and plaintext HTTP; do not reintroduce an asynchronous runtime or TLS for devices that expose neither.
 - Update this specification when changing a behavioral decision or protocol.
 
 ## Known hardware status

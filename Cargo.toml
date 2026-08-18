@@ -1,6 +1,6 @@
 [package]
 name = "keylightd"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Moritz Heiber <moritz@heiber.im>"]
 description = "Automatic Elgato Key Light control based on camera activity and ambient light"
@@ -13,11 +13,18 @@ anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 libc = "0.2.189"
 mdns-sd = "0.21.0"
-reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 signal-hook = "0.4.4"
 toml = "1.1.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+ureq = { version = "3.4.0", default-features = false, features = ["json"] }
 zbus = { version = "5.19.0", features = ["blocking"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
