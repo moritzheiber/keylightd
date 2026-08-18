@@ -244,9 +244,11 @@ Resume begins a new camera session; pre-suspend activity is not resumed implicit
 
 ## Packaging and releases
 
-`scripts/build-deb.sh` is the only packaging entry point. It uses Docker Buildx, the official Rust image, and an Ubuntu 26.04 packaging stage. The host receives only `dist/*.deb`.
+`scripts/build-deb.sh` is the only packaging entry point. It builds entirely inside an `ubuntu:26.04` container with Docker Buildx; the host receives only `dist/*.deb`.
 
-Version tags matching the Cargo version, such as `v0.1.0`, build amd64 and arm64 packages and attach them to a GitHub release.
+The Rust toolchain is defined solely by `rust-toolchain.toml` (channel, profile, components, and cross targets). The container installs `rustup` from Ubuntu and materialises the pinned toolchain with `rustup show`, so the compiler version has a single source of truth and no separate image tag to keep in sync.
+
+Version tags matching the Cargo version, such as `v0.1.0`, build amd64 and arm64 packages and attach them to a GitHub release. The release workflow reuses the CI workflow (`.github/workflows/ci.yml`) for formatting, linting, and tests before packaging.
 
 The Debian package:
 
