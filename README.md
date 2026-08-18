@@ -10,18 +10,22 @@ Download the package for your architecture from a GitHub release, then install i
 
 ```console
 sudo apt install ./keylightd_0.1.0-1_amd64.deb
-install -Dm 0644 /usr/share/doc/keylightd/config.example.toml ~/.config/keylightd/config.toml
-systemctl --user daemon-reload
-systemctl --user enable --now keylightd.service
 ```
 
-The package enables the privileged camera service. The user service is enabled separately for the desired graphical account.
+Installation enables and starts the privileged camera service and enables the per-user controller globally, so the controller starts in the current graphical session and on each subsequent login.
+
+Configuration is optional: with no config file the daemon uses defaults and auto-selects a single discovered Key Light. To start from the documented example, copy it into place and reload:
+
+```console
+install -Dm 0644 /usr/share/doc/keylightd/config.example.toml ~/.config/keylightd/config.toml
+keylightd reload
+```
 
 The privileged service reads only the kernel V4L2 dequeue tracepoint and publishes a heartbeat plus per-camera frame state under `/run/keylightd`. The user service owns device selection, Key Light control, and restoration.
 
 ## Build a package
 
-The local builder requires only Docker with Buildx. Rust comes from the official image; compilation, cross-compilers, and `dpkg-deb` run inside Ubuntu 26.04:
+The local builder requires only Docker with Buildx. The Rust toolchain is pinned by `rust-toolchain.toml` and installed with `rustup` inside the Ubuntu 26.04 build stage, where compilation, cross-compilers, and `dpkg-deb` run:
 
 ```console
 scripts/build-deb.sh

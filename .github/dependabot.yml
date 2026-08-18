@@ -8,9 +8,8 @@ updates:
     open-pull-requests-limit: 10
     groups:
       cargo:
-        update-types:
-          - minor
-          - patch
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
@@ -18,9 +17,8 @@ updates:
       interval: weekly
     groups:
       github-actions:
-        update-types:
-          - minor
-          - patch
+        patterns:
+          - "*"
 
   - package-ecosystem: docker
     directory: /packaging
@@ -28,6 +26,5 @@ updates:
       interval: weekly
     groups:
       docker:
-        update-types:
-          - minor
-          - patch
+        patterns:
+          - "*"
