@@ -10,6 +10,17 @@ if [ "${1:-}" = "configure" ] || [ "${1:-}" = "abort-upgrade" ] ||
         deb-systemd-helper update-state keylightd-camera.service >/dev/null || true
     fi
 
+    # Migrate installs enabled under the previous WantedBy=default.target.
+    # deb-systemd-helper does not remove an obsolete Install symlink when the
+    # target changes, so purge its stale state and re-enable from the current
+    # [Install]. Version-gated so a deliberate `systemctl --user disable` is
+    # preserved on upgrades from already-fixed releases.
+    if [ -z "${DPKG_ROOT:-}" ] && [ -n "${2:-}" ] &&
+        dpkg --compare-versions "$2" lt "0.3.1~"; then
+        deb-systemd-helper --user purge keylightd.service >/dev/null || true
+        deb-systemd-helper --user enable keylightd.service >/dev/null || true
+    fi
+
     if [ -z "${DPKG_ROOT:-}" ]; then
         deb-systemd-helper --user unmask keylightd.service >/dev/null || true
         if deb-systemd-helper --quiet --user was-enabled keylightd.service; then
