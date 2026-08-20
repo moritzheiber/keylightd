@@ -1,8 +1,8 @@
 [Unit]
 Description=Automatic Elgato Key Light control
 Documentation=https://github.com/moritzheiber/keylightd
+PartOf=graphical-session.target
 After=graphical-session.target
-Wants=graphical-session.target
 
 [Service]
 Type=simple
@@ -12,4 +12,4 @@ RestartSec=2
 TimeoutStopSec=90
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
