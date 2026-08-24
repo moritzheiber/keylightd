@@ -4,20 +4,24 @@ use std::fs;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixDatagram};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use tracing::{debug, error, info, warn};
 
 use crate::ambient::{AmbientSensor, brightness_for_lux};
-use crate::config::{Config, SelectedLight};
+use crate::config::{Config, PresetLightConfig, SelectedLight};
+use crate::control::{self, ManualCommand, SharedStatus, Status};
 use crate::domain::{
-    CameraActivity, CameraSnapshot, OwnedLight, OwnershipJournal, STATE_VERSION, override_states,
-    ownership_matches,
+    CameraActivity, CameraSnapshot, KELVIN_MAX, KELVIN_MIN, LogicalLightState, OwnedLight,
+    OwnershipJournal, STATE_VERSION, kelvin_to_mired, mired_to_kelvin, ownership_matches,
+    session_target_states,
 };
 use crate::ensure_light_selection;
 use crate::light::{KeyLight, resolve_selected};
@@ -71,16 +75,25 @@ struct Controller {
     shutting_down: bool,
     session_brightness: Option<u8>,
     suspend_ready: Option<mpsc::SyncSender<()>>,
+    status: SharedStatus,
 }
 
 pub fn run() -> Result<()> {
-    let _lock = match acquire_lock() {
-        Ok(lock) => lock,
-        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-            info!("another user session already owns keylightd");
-            return Ok(());
+    // A shutdown flag lets the lock wait below respond to systemd stop/restart
+    // promptly. signal_hook chains this handler with the main-loop Signals
+    // handler installed later in event_channel(), so both observe every signal.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    for signal in [SIGINT, SIGTERM] {
+        signal_hook::flag::register(signal, Arc::clone(&shutdown))
+            .context("register shutdown flag for the ownership wait")?;
+    }
+
+    let _lock = match wait_for_lock(&shutdown) {
+        LockOutcome::Acquired(lock) => lock,
+        LockOutcome::Shutdown => return Ok(()),
+        LockOutcome::Failed(error) => {
+            return Err(error).context("acquire machine-wide daemon lock");
         }
-        Err(error) => return Err(error).context("acquire machine-wide daemon lock"),
     };
     let journal = load_journal()?;
     let mut config = Config::load()?;
@@ -111,6 +124,7 @@ pub fn run() -> Result<()> {
         shutting_down: false,
         session_brightness: None,
         suspend_ready: None,
+        status: Arc::new(Mutex::new(Status::default())),
     };
     controller.retries.extend(
         controller
@@ -120,11 +134,27 @@ pub fn run() -> Result<()> {
             .cloned()
             .map(|id| (id, Retry::immediate())),
     );
+    controller.publish_status();
+    let manual = control::spawn(
+        controller.selected.clone(),
+        controller.config.light.clone(),
+        Arc::clone(&controller.status),
+    );
     let events = event_channel()?;
+
+    // A signal delivered between flag registration and the Signals handler being
+    // installed above sets the flag but is not seen by the event channel; honour
+    // it here so a stop during startup still restores and exits cleanly.
+    if shutdown.load(Ordering::Relaxed) {
+        controller.handle_event(Event::Shutdown);
+    }
 
     loop {
         while let Ok(event) = events.try_recv() {
             controller.handle_event(event);
+        }
+        while let Ok(command) = manual.try_recv() {
+            controller.handle_manual(command);
         }
         let activity = if controller.suspended || controller.shutting_down {
             CameraActivity::Inactive
@@ -132,6 +162,7 @@ pub fn run() -> Result<()> {
             read_camera_activity(&controller.config)
         };
         controller.tick(activity)?;
+        controller.publish_status();
         if controller.suspended
             && controller.journal.lights.is_empty()
             && let Some(ready) = controller.suspend_ready.take()
@@ -184,6 +215,144 @@ impl Controller {
                 info!("resumed; awaiting a new camera session");
             }
         }
+    }
+
+    fn publish_status(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.camera_active = self.camera_active;
+            status.has_preset = self.config.light.preset.is_some();
+        }
+    }
+
+    fn handle_manual(&mut self, command: ManualCommand) {
+        let result = match command {
+            ManualCommand::SetPower { light, on } => self.manual_light(light, |states| {
+                for state in states.iter_mut() {
+                    state.on = on;
+                }
+            }),
+            ManualCommand::TogglePower { light } => self.manual_light(light, |states| {
+                let any_on = states.iter().any(|state| state.on);
+                for state in states.iter_mut() {
+                    state.on = !any_on;
+                }
+            }),
+            ManualCommand::SetBrightness { light, brightness } => {
+                let brightness = brightness.clamp(1, 100);
+                self.manual_light(light, |states| {
+                    for state in states.iter_mut() {
+                        state.brightness = brightness;
+                    }
+                })
+            }
+            ManualCommand::AdjustBrightness { light, delta } => {
+                self.manual_light(light, |states| {
+                    for state in states.iter_mut() {
+                        state.brightness = adjust(i32::from(state.brightness), delta, 1, 100) as u8;
+                    }
+                })
+            }
+            ManualCommand::SetTemperatureKelvin { light, kelvin } => {
+                let mired = kelvin_to_mired(kelvin);
+                self.manual_light(light, |states| {
+                    for state in states.iter_mut() {
+                        state.temperature = mired;
+                    }
+                })
+            }
+            ManualCommand::AdjustTemperatureKelvin { light, delta } => {
+                self.manual_light(light, |states| {
+                    for state in states.iter_mut() {
+                        let kelvin = adjust(
+                            i32::from(mired_to_kelvin(state.temperature)),
+                            delta,
+                            i32::from(KELVIN_MIN),
+                            i32::from(KELVIN_MAX),
+                        ) as u16;
+                        state.temperature = kelvin_to_mired(kelvin);
+                    }
+                })
+            }
+            ManualCommand::SavePreset => self.manual_save_preset(),
+            ManualCommand::ApplyPreset => self.manual_apply_preset(),
+        };
+        if let Err(error) = result {
+            warn!(%error, "manual command failed");
+        }
+    }
+
+    fn manual_light(
+        &mut self,
+        index: usize,
+        transform: impl Fn(&mut Vec<LogicalLightState>),
+    ) -> Result<()> {
+        let Some(selection) = self.selected.get(index).cloned() else {
+            return Ok(());
+        };
+        for (id, light) in resolve_selected(&self.config.light, std::slice::from_ref(&selection)) {
+            let light = light?;
+            let mut states = light.states()?;
+            transform(&mut states);
+            light.set_states(&states)?;
+            if let Some(owned) = self.journal.lights.get_mut(&id.id) {
+                owned.applied = states;
+                save_journal(&self.journal)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn manual_save_preset(&mut self) -> Result<()> {
+        let mut preset = Vec::new();
+        for selection in self.selected.clone() {
+            for (id, light) in
+                resolve_selected(&self.config.light, std::slice::from_ref(&selection))
+            {
+                let light = light?;
+                if let Some(state) = light.states()?.into_iter().next() {
+                    preset.push(PresetLightConfig {
+                        id: id.id.clone(),
+                        on: state.on,
+                        brightness: state.brightness,
+                        temperature_kelvin: mired_to_kelvin(state.temperature),
+                    });
+                }
+            }
+        }
+        self.config.light.preset = Some(preset);
+        self.config.save()?;
+        self.publish_status();
+        info!("saved preset from applet");
+        Ok(())
+    }
+
+    fn manual_apply_preset(&mut self) -> Result<()> {
+        if self.config.light.preset.is_none() {
+            return Ok(());
+        }
+        for selection in self.selected.clone() {
+            let Some(target) = self.config.light.preset_for(&selection.id) else {
+                continue;
+            };
+            for (id, light) in
+                resolve_selected(&self.config.light, std::slice::from_ref(&selection))
+            {
+                let light = light?;
+                let mut states = light.states()?;
+                for state in states.iter_mut() {
+                    state.on = target.on;
+                    state.brightness = target.brightness;
+                    state.temperature = target.temperature;
+                }
+                light.set_states(&states)?;
+                if let Some(owned) = self.journal.lights.get_mut(&id.id) {
+                    owned.applied = states;
+                    save_journal(&self.journal)?;
+                }
+            }
+        }
+        info!("applied preset from applet");
+        Ok(())
     }
 
     fn tick(&mut self, activity: CameraActivity) -> Result<()> {
@@ -298,7 +467,8 @@ impl Controller {
         }
 
         let original = light.states()?;
-        let applied = override_states(&original, self.session_brightness);
+        let preset = self.config.light.preset_for(&selection.id);
+        let applied = session_target_states(&original, self.session_brightness, preset);
         self.journal.lights.insert(
             selection.id.clone(),
             OwnedLight {
@@ -457,6 +627,10 @@ fn call_brightness(config: &Config) -> Option<u8> {
     }
 }
 
+fn adjust(current: i32, delta: i32, min: i32, max: i32) -> i32 {
+    current.saturating_add(delta).clamp(min, max)
+}
+
 fn event_channel() -> Result<Receiver<Event>> {
     let (sender, receiver) = mpsc::channel();
     let mut signals = Signals::new([SIGINT, SIGTERM, SIGHUP]).context("register signals")?;
@@ -555,8 +729,78 @@ fn monitor_suspend(sender: mpsc::Sender<Event>) -> Result<()> {
     Ok(())
 }
 
-fn acquire_lock() -> std::io::Result<UnixDatagram> {
-    acquire_lock_named(LOCK_NAME)
+enum LockOutcome {
+    Acquired(UnixDatagram),
+    Shutdown,
+    Failed(std::io::Error),
+}
+
+fn wait_for_lock(shutdown: &AtomicBool) -> LockOutcome {
+    wait_for_lock_named(LOCK_NAME, shutdown)
+}
+
+// Acquire the machine-wide single-writer lock, waiting for the current owner to
+// release it rather than exiting on contention. This survives the restart race
+// during an upgrade and lets ownership hand off between sessions, so whichever
+// instance is parked here takes over when the previous owner logs out, suspends,
+// or stops. The wait is interruptible so a stop request never blocks shutdown.
+fn wait_for_lock_named(name: &[u8], shutdown: &AtomicBool) -> LockOutcome {
+    let mut retry = Retry::immediate();
+    let mut waited = false;
+    loop {
+        if shutdown.load(Ordering::Relaxed) {
+            return LockOutcome::Shutdown;
+        }
+        match acquire_lock_named(name) {
+            Ok(lock) => {
+                if waited {
+                    info!("acquired keylightd ownership after the previous owner released it");
+                }
+                return LockOutcome::Acquired(lock);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                if waited {
+                    debug!(
+                        retry_seconds = retry.backoff.as_secs(),
+                        "still waiting for the keylightd ownership lock"
+                    );
+                } else {
+                    waited = true;
+                    info!(
+                        retry_seconds = retry.backoff.as_secs(),
+                        "another keylightd instance holds the machine-wide lock; \
+                         waiting to take over ownership"
+                    );
+                }
+                if wait_or_shutdown(retry.backoff, shutdown) {
+                    info!(
+                        "stopping before acquiring ownership; \
+                         shutdown requested while another instance held the lock"
+                    );
+                    return LockOutcome::Shutdown;
+                }
+                retry = retry.failed();
+            }
+            Err(error) => return LockOutcome::Failed(error),
+        }
+    }
+}
+
+// Sleep for the given duration in small slices, returning early with true as
+// soon as a shutdown is requested.
+fn wait_or_shutdown(duration: Duration, shutdown: &AtomicBool) -> bool {
+    const SLICE: Duration = Duration::from_millis(100);
+    let deadline = Instant::now() + duration;
+    loop {
+        if shutdown.load(Ordering::Relaxed) {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        thread::sleep((deadline - now).min(SLICE));
+    }
 }
 
 fn acquire_lock_named(name: &[u8]) -> std::io::Result<UnixDatagram> {
@@ -579,10 +823,20 @@ fn load_journal() -> Result<OwnershipJournal> {
     }
     let contents =
         fs::read_to_string(&path).with_context(|| format!("read journal {}", path.display()))?;
-    let journal: OwnershipJournal = serde_json::from_str(&contents)
-        .with_context(|| format!("parse journal {}", path.display()))?;
+    let journal: OwnershipJournal = match serde_json::from_str(&contents) {
+        Ok(journal) => journal,
+        Err(error) => {
+            warn!(%error, path = %path.display(), "ignoring unreadable ownership journal");
+            return Ok(OwnershipJournal::default());
+        }
+    };
     if journal.version != STATE_VERSION {
-        bail!("unsupported ownership journal version {}", journal.version);
+        warn!(
+            version = journal.version,
+            expected = STATE_VERSION,
+            "ignoring ownership journal from an incompatible version"
+        );
+        return Ok(OwnershipJournal::default());
     }
     Ok(journal)
 }
@@ -629,5 +883,42 @@ mod tests {
         assert!(acquire_lock_named(name.as_bytes()).is_err());
         drop(first);
         assert!(acquire_lock_named(name.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn wait_for_lock_acquires_when_free() {
+        let name = format!("keylightd-free-{}", std::process::id());
+        let shutdown = AtomicBool::new(false);
+        match wait_for_lock_named(name.as_bytes(), &shutdown) {
+            LockOutcome::Acquired(_lock) => {}
+            _ => panic!("expected an immediate acquisition when the lock is free"),
+        }
+    }
+
+    #[test]
+    fn wait_for_lock_yields_when_already_shutting_down() {
+        let name = format!("keylightd-preempt-{}", std::process::id());
+        let shutdown = AtomicBool::new(true);
+        match wait_for_lock_named(name.as_bytes(), &shutdown) {
+            LockOutcome::Shutdown => {}
+            _ => panic!("expected shutdown to preempt acquisition"),
+        }
+    }
+
+    #[test]
+    fn wait_for_lock_gives_up_on_shutdown_during_contention() {
+        let name = format!("keylightd-contend-{}", std::process::id());
+        let held = acquire_lock_named(name.as_bytes()).unwrap();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&shutdown);
+        let owned_name = name.clone();
+        let waiter = thread::spawn(move || wait_for_lock_named(owned_name.as_bytes(), &flag));
+        thread::sleep(Duration::from_millis(50));
+        shutdown.store(true, Ordering::Relaxed);
+        match waiter.join().unwrap() {
+            LockOutcome::Shutdown => {}
+            _ => panic!("expected the contended waiter to yield on shutdown"),
+        }
+        drop(held);
     }
 }

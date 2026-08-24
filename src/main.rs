@@ -1,6 +1,7 @@
 mod ambient;
 mod camera;
 mod config;
+mod control;
 mod daemon;
 mod domain;
 mod light;
@@ -18,7 +19,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::ambient::AmbientSensor;
 use crate::camera::CameraMonitor;
-use crate::config::{CalibrationPoint, Config, SelectedCamera, SelectedLight};
+use crate::config::{CalibrationPoint, Config, PresetLightConfig, SelectedCamera, SelectedLight};
 use crate::domain::CameraSnapshot;
 use crate::light::{KeyLight, discover_all, resolve_selected, selected_from_discovered};
 
@@ -56,6 +57,10 @@ enum Command {
 enum LightsCommand {
     List,
     Select,
+    /// Capture the current state of all selected lights as the preset.
+    SavePreset,
+    /// Apply the saved preset to all selected lights.
+    ApplyPreset,
 }
 
 #[derive(Subcommand)]
@@ -88,45 +93,122 @@ fn main() -> Result<()> {
 }
 
 fn lights(command: LightsCommand) -> Result<()> {
+    match command {
+        LightsCommand::List => lights_list(),
+        LightsCommand::Select => lights_select(),
+        LightsCommand::SavePreset => lights_save_preset(),
+        LightsCommand::ApplyPreset => lights_apply_preset(),
+    }
+}
+
+fn lights_list() -> Result<()> {
+    let config = Config::load()?;
+    let discovered = discover_all(config.light.discovery_timeout_seconds)?;
+    for (index, light) in discovered.iter().enumerate() {
+        println!(
+            "{}\t{}\t{}\t{}",
+            index + 1,
+            light.id,
+            light.name,
+            light.endpoint
+        );
+    }
+    Ok(())
+}
+
+fn lights_select() -> Result<()> {
     let mut config = Config::load()?;
     let discovered = discover_all(config.light.discovery_timeout_seconds)?;
-    match command {
-        LightsCommand::List => {
-            for (index, light) in discovered.iter().enumerate() {
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    index + 1,
-                    light.id,
-                    light.name,
-                    light.endpoint
-                );
+    if discovered.is_empty() {
+        bail!("no Key Lights discovered; existing selection was not changed");
+    }
+    for (index, light) in discovered.iter().enumerate() {
+        println!("{}. {} ({})", index + 1, light.name, light.id);
+    }
+    let selected = prompt_selection(discovered.len())?;
+    if selected.is_empty() {
+        println!("Selection unchanged");
+        return Ok(());
+    }
+    config.light.selected = Some(
+        selected
+            .into_iter()
+            .map(|index| selected_from_discovered(&discovered[index]))
+            .collect(),
+    );
+    config.light.address = None;
+    config.save()?;
+    println!("Saved Key Light selection");
+    Ok(())
+}
+
+fn lights_save_preset() -> Result<()> {
+    let mut config = Config::load()?;
+    let selected = ensure_light_selection(&mut config, true)?;
+    let mut preset = Vec::new();
+    for (selection, light) in resolve_selected(&config.light, &selected) {
+        let light =
+            light.with_context(|| format!("connect selected Key Light {}", selection.id))?;
+        let state = light
+            .states()?
+            .into_iter()
+            .next()
+            .with_context(|| format!("Key Light {} has no logical lights", selection.id))?;
+        let temperature_kelvin = crate::domain::mired_to_kelvin(state.temperature);
+        preset.push(PresetLightConfig {
+            id: selection.id.clone(),
+            on: state.on,
+            brightness: state.brightness,
+            temperature_kelvin,
+        });
+        println!(
+            "{}\ton={}\tbrightness={}\ttemperature={}K",
+            selection.id, state.on, state.brightness, temperature_kelvin
+        );
+    }
+    config.light.preset = Some(preset);
+    config.save()?;
+    println!("Saved preset");
+    Ok(())
+}
+
+fn lights_apply_preset() -> Result<()> {
+    let mut config = Config::load()?;
+    if config.light.preset.is_none() {
+        bail!("no preset saved; run `keylightd lights save-preset` first");
+    }
+    let selected = ensure_light_selection(&mut config, true)?;
+    let mut failed = false;
+    for (selection, light) in resolve_selected(&config.light, &selected) {
+        let Some(target) = config.light.preset_for(&selection.id) else {
+            eprintln!("{}\tSKIP\tno preset entry", selection.id);
+            continue;
+        };
+        let result = light.and_then(|light| {
+            let states = light
+                .states()?
+                .into_iter()
+                .map(|_| crate::domain::LogicalLightState {
+                    on: target.on,
+                    brightness: target.brightness,
+                    temperature: target.temperature,
+                })
+                .collect::<Vec<_>>();
+            light.set_states(&states)
+        });
+        match result {
+            Ok(()) => println!("{}\tapplied", selection.id),
+            Err(error) => {
+                failed = true;
+                eprintln!("{}\tERROR\t{error:#}", selection.id);
             }
-            Ok(())
-        }
-        LightsCommand::Select => {
-            if discovered.is_empty() {
-                bail!("no Key Lights discovered; existing selection was not changed");
-            }
-            for (index, light) in discovered.iter().enumerate() {
-                println!("{}. {} ({})", index + 1, light.name, light.id);
-            }
-            let selected = prompt_selection(discovered.len())?;
-            if selected.is_empty() {
-                println!("Selection unchanged");
-                return Ok(());
-            }
-            config.light.selected = Some(
-                selected
-                    .into_iter()
-                    .map(|index| selected_from_discovered(&discovered[index]))
-                    .collect(),
-            );
-            config.light.address = None;
-            config.save()?;
-            println!("Saved Key Light selection");
-            Ok(())
         }
     }
+    if failed {
+        bail!("failed to apply the preset to one or more lights");
+    }
+    println!("Applied preset");
+    Ok(())
 }
 
 fn cameras(command: CamerasCommand) -> Result<()> {
@@ -274,9 +356,10 @@ fn calibrate() -> Result<()> {
         let states = light
             .states()?
             .into_iter()
-            .map(|_| crate::domain::LogicalLightState {
+            .map(|state| crate::domain::LogicalLightState {
                 on: true,
                 brightness,
+                temperature: state.temperature,
             })
             .collect::<Vec<_>>();
         light.set_states(&states)?;

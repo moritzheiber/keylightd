@@ -23,21 +23,40 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
-      - name: Verify tag version
+      - name: Verify version consistency
         shell: bash
         run: |
-          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          test "v${version}" = "${GITHUB_REF_NAME}"
-      - name: Build Ubuntu 26.04 Debian package
-        run: scripts/build-deb.sh --architecture "${{ matrix.architecture }}"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          changelog_version="$(sed -n '1s/^keylightd (\([^)]*\)).*/\1/p' debian/changelog)"
+          echo "tag=${GITHUB_REF_NAME} cargo=${cargo_version} changelog=${changelog_version}"
+          test "v${cargo_version}" = "${GITHUB_REF_NAME}"
+          test "${changelog_version}" = "${cargo_version}"
+      - name: Build daemon package
+        run: scripts/build-deb.sh --architecture "${{ matrix.architecture }}" --build any
       - uses: actions/upload-artifact@v7
         with:
           name: keylightd-${{ matrix.architecture }}
           path: dist/*.deb
           if-no-files-found: error
 
+  package-extension:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build extension package
+        run: scripts/build-deb.sh --build all
+      - uses: actions/upload-artifact@v7
+        with:
+          name: keylightd-extension
+          path: dist/*.deb
+          if-no-files-found: error
+
   release:
-    needs: package
+    needs:
+      - package
+      - package-extension
     runs-on: ubuntu-24.04
     permissions:
       contents: write

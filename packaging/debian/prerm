@@ -1,8 +1,0 @@
-#!/bin/sh
-set -eu
-
-if [ -z "${DPKG_ROOT:-}" ] && [ "${1:-}" = "remove" ] &&
-    [ -d /run/systemd/system ]; then
-    deb-systemd-invoke --user stop keylightd.service >/dev/null || true
-    deb-systemd-invoke stop keylightd-camera.service >/dev/null || true
-fi

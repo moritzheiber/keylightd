@@ -1,0 +1,3 @@
+usr/bin/keylightd
+systemd/keylightd-camera.service usr/lib/systemd/system/
+systemd/keylightd.service usr/lib/systemd/user/

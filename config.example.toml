@@ -10,6 +10,16 @@ discovery_timeout_seconds = 3
 # service_name = "Elgato Key Light._elg._tcp.local."
 # fallback_address = "http://192.0.2.10:9123"
 
+# Added by `keylightd lights save-preset`. The preset is the on-camera look used
+# when no ambient calibration applies. Applying it reproduces each light's saved
+# state faithfully, so a light saved off stays off. Temperature is in Kelvin
+# (2900-7000) and converted to the device's mired units internally.
+# [[light.preset]]
+# id = "serial:A2UTB32614EYQG"
+# on = true
+# brightness = 60
+# temperature_kelvin = 4500
+
 [camera]
 state_file = "/run/keylightd/camera-state.json"
 poll_interval_ms = 250

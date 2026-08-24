@@ -1,0 +1,49 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/architecture.mk
+
+ifeq ($(DEB_HOST_ARCH),amd64)
+RUST_TARGET := x86_64-unknown-linux-gnu
+else ifeq ($(DEB_HOST_ARCH),arm64)
+RUST_TARGET := aarch64-unknown-linux-gnu
+else
+$(error Unsupported architecture: $(DEB_HOST_ARCH))
+endif
+
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = aarch64-linux-gnu-gcc
+export CC_aarch64_unknown_linux_gnu = aarch64-linux-gnu-gcc
+export AR_aarch64_unknown_linux_gnu = aarch64-linux-gnu-ar
+
+# Derive the supported GNOME Shell major versions from the extension metadata,
+# using only coreutils so no interpreter is pulled into Build-Depends. The
+# compatible range is [min .. max+1) major versions.
+GNOME_VERSIONS := $(shell grep -oE '"shell-version"[^]]*\]' extension/metadata.json | grep -oE '[0-9]+' | sort -n)
+GNOME_MIN := $(firstword $(GNOME_VERSIONS))
+GNOME_MAX_NEXT := $(shell echo $$(($(lastword $(GNOME_VERSIONS)) + 1)))
+
+%:
+	dh $@
+
+override_dh_gencontrol:
+	dh_gencontrol -- \
+		-Vgnome:MinimumVersion=$(GNOME_MIN) \
+		-Vgnome:MaximumVersion=$(GNOME_MAX_NEXT)
+
+override_dh_auto_build-arch:
+	cargo build --release --locked --target $(RUST_TARGET)
+
+override_dh_auto_build-indep:
+
+override_dh_auto_test:
+	# Tests run in CI; skip during packaging because cross builds cannot
+	# execute target binaries on the build host.
+
+override_dh_auto_install-arch:
+	install -D -m 0755 target/$(RUST_TARGET)/release/keylightd \
+		debian/tmp/usr/bin/keylightd
+
+override_dh_auto_install-indep:
+
+override_dh_auto_clean:
+	# Preserve the Cargo target directory for incremental packaging builds;
+	# it is git-ignored and dh_clean removes the debian staging directories.

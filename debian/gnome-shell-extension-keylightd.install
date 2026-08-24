@@ -1,0 +1,6 @@
+extension/metadata.json usr/share/gnome-shell/extensions/keylightd@heiber.im/
+extension/extension.js usr/share/gnome-shell/extensions/keylightd@heiber.im/
+extension/stylesheet.css usr/share/gnome-shell/extensions/keylightd@heiber.im/
+extension/icons/keylightd-symbolic.svg usr/share/gnome-shell/extensions/keylightd@heiber.im/icons/
+extension/icons/keylightd-temperature-symbolic.svg usr/share/gnome-shell/extensions/keylightd@heiber.im/icons/
+extension/schemas/org.gnome.shell.extensions.keylightd.gschema.xml usr/share/glib-2.0/schemas/

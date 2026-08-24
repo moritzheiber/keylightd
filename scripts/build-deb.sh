@@ -3,15 +3,19 @@ set -euo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 architecture=""
-target=""
+build_type="binary"
 output_dir="$root/dist"
 
 usage() {
     cat <<EOF
-Usage: scripts/build-deb.sh [--architecture amd64|arm64] [--target RUST_TARGET] [--output-dir DIR]
+Usage: scripts/build-deb.sh [--architecture amd64|arm64] [--build any|all|binary] [--output-dir DIR]
 
-Builds the package entirely inside an Ubuntu 26.04 container.
-Requires Docker with the Buildx plugin.
+Builds the Debian packages with debhelper entirely inside an Ubuntu 26.04
+container. Requires Docker with the Buildx plugin.
+
+  --build any     only the architecture-dependent daemon package
+  --build all     only the architecture-independent extension package
+  --build binary  both packages (default)
 EOF
 }
 
@@ -21,8 +25,8 @@ while (($#)); do
             architecture="${2:?missing value for --architecture}"
             shift 2
             ;;
-        --target)
-            target="${2:?missing value for --target}"
+        --build)
+            build_type="${2:?missing value for --build}"
             shift 2
             ;;
         --output-dir)
@@ -41,6 +45,14 @@ while (($#)); do
     esac
 done
 
+case "$build_type" in
+    any | all | binary) ;;
+    *)
+        echo "Unsupported --build type: $build_type (expected any, all, or binary)" >&2
+        exit 1
+        ;;
+esac
+
 if [[ -z "$architecture" ]]; then
     case "$(uname -m)" in
         x86_64) architecture="amd64" ;;
@@ -52,21 +64,10 @@ if [[ -z "$architecture" ]]; then
     esac
 fi
 
-if [[ -z "$target" ]]; then
-    case "$architecture" in
-        amd64) target="x86_64-unknown-linux-gnu" ;;
-        arm64) target="aarch64-unknown-linux-gnu" ;;
-        *)
-            echo "Unsupported Debian architecture: $architecture" >&2
-            exit 1
-            ;;
-    esac
-fi
-
-case "$architecture:$target" in
-    amd64:x86_64-unknown-linux-gnu | arm64:aarch64-unknown-linux-gnu) ;;
+case "$architecture" in
+    amd64 | arm64) ;;
     *)
-        echo "Debian architecture $architecture does not match Rust target $target" >&2
+        echo "Unsupported Debian architecture: $architecture" >&2
         exit 1
         ;;
 esac
@@ -83,8 +84,8 @@ output_dir="$(cd -- "$output_dir" && pwd)"
 docker buildx build \
     --file "$root/packaging/Dockerfile" \
     --target artifact \
-    --build-arg "RUST_TARGET=$target" \
-    --build-arg "DEB_ARCH=$architecture" \
+    --build-arg "DEB_HOST_ARCH=$architecture" \
+    --build-arg "DEB_BUILD_TYPE=$build_type" \
     --build-arg "SOURCE_DATE_EPOCH=$source_date_epoch" \
     --output "type=local,dest=$output_dir" \
     "$root"

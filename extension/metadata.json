@@ -1,0 +1,8 @@
+{
+  "uuid": "keylightd@heiber.im",
+  "name": "keylightd",
+  "description": "Control Elgato Key Lights managed by keylightd from a dedicated top-bar button. The button and its light controls appear only while the keylightd session service is available.",
+  "shell-version": ["47", "48", "49", "50"],
+  "settings-schema": "org.gnome.shell.extensions.keylightd",
+  "url": "https://github.com/moritzheiber/keylightd"
+}

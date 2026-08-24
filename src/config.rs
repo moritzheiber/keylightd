@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::{KELVIN_MAX, KELVIN_MIN, PresetLight, kelvin_to_mired};
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -19,6 +21,7 @@ pub struct LightConfig {
     pub selected: Option<Vec<SelectedLight>>,
     pub address: Option<String>,
     pub discovery_timeout_seconds: u64,
+    pub preset: Option<Vec<PresetLightConfig>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -28,6 +31,17 @@ pub struct SelectedLight {
     pub name: String,
     pub service_name: Option<String>,
     pub fallback_address: Option<String>,
+}
+
+/// A saved preset entry for one physical light. Colour temperature is stored in
+/// Kelvin for readability and converted to device mired when applied.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PresetLightConfig {
+    pub id: String,
+    pub on: bool,
+    pub brightness: u8,
+    pub temperature_kelvin: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -69,7 +83,24 @@ impl Default for LightConfig {
             selected: None,
             address: None,
             discovery_timeout_seconds: 3,
+            preset: None,
         }
+    }
+}
+
+impl LightConfig {
+    /// Resolve the saved preset for a physical light by stable identity,
+    /// converting the stored Kelvin temperature to device mired units.
+    pub fn preset_for(&self, id: &str) -> Option<PresetLight> {
+        self.preset
+            .as_deref()?
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| PresetLight {
+                on: entry.on,
+                brightness: entry.brightness,
+                temperature: kelvin_to_mired(entry.temperature_kelvin),
+            })
     }
 }
 
@@ -150,6 +181,32 @@ impl Config {
         for camera in self.camera.selected.as_deref().unwrap_or_default() {
             if camera.inactive_seconds == Some(0) {
                 bail!("camera {} has a zero inactivity timeout", camera.id);
+            }
+        }
+        if self.light.preset.as_ref().is_some_and(Vec::is_empty) {
+            bail!("preset cannot be empty");
+        }
+        validate_unique_ids(
+            self.light
+                .preset
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|light| light.id.as_str()),
+            "preset",
+        )?;
+        for entry in self.light.preset.as_deref().unwrap_or_default() {
+            if !(1..=100).contains(&entry.brightness) {
+                bail!(
+                    "preset brightness for {} must be between 1 and 100",
+                    entry.id
+                );
+            }
+            if !(KELVIN_MIN..=KELVIN_MAX).contains(&entry.temperature_kelvin) {
+                bail!(
+                    "preset colour temperature for {} must be between {KELVIN_MIN} and {KELVIN_MAX} K",
+                    entry.id
+                );
             }
         }
         let mut previous: Option<&CalibrationPoint> = None;
@@ -248,5 +305,36 @@ mod tests {
     #[test]
     fn unknown_configuration_fields_are_rejected() {
         assert!(toml::from_str::<Config>("[camera]\nunknown = true\n").is_err());
+    }
+
+    #[test]
+    fn preset_validates_ranges_uniqueness_and_resolves_to_mired() {
+        let mut config = Config::default();
+        config.light.preset = Some(vec![PresetLightConfig {
+            id: "serial:one".to_owned(),
+            on: true,
+            brightness: 60,
+            temperature_kelvin: 4500,
+        }]);
+        config.validate().unwrap();
+        assert_eq!(
+            config.light.preset_for("serial:one"),
+            Some(PresetLight {
+                on: true,
+                brightness: 60,
+                temperature: kelvin_to_mired(4500),
+            })
+        );
+        assert!(config.light.preset_for("serial:missing").is_none());
+
+        config.light.preset.as_mut().unwrap()[0].brightness = 0;
+        assert!(config.validate().is_err());
+
+        config.light.preset.as_mut().unwrap()[0].brightness = 60;
+        config.light.preset.as_mut().unwrap()[0].temperature_kelvin = 1000;
+        assert!(config.validate().is_err());
+
+        config.light.preset = Some(Vec::new());
+        assert!(config.validate().is_err());
     }
 }

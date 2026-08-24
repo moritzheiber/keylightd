@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="keylightd">
+  <schema id="org.gnome.shell.extensions.keylightd"
+          path="/org/gnome/shell/extensions/keylightd/">
+    <key name="brightness-up" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Increase Key Light brightness</summary>
+      <description>Global shortcut that raises the brightness of every selected Key Light.</description>
+    </key>
+    <key name="brightness-down" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Decrease Key Light brightness</summary>
+      <description>Global shortcut that lowers the brightness of every selected Key Light.</description>
+    </key>
+    <key name="toggle-power" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Toggle Key Light power</summary>
+      <description>Global shortcut that toggles the power of every selected Key Light.</description>
+    </key>
+  </schema>
+</schemalist>

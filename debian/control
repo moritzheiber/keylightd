@@ -1,0 +1,45 @@
+Source: keylightd
+Section: utils
+Priority: optional
+Maintainer: Moritz Heiber <moritz@heiber.im>
+Build-Depends:
+ debhelper-compat (= 13),
+ pkg-config,
+Standards-Version: 4.7.2
+Homepage: https://github.com/moritzheiber/keylightd
+Rules-Requires-Root: no
+
+Package: keylightd
+Architecture: any
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: automatic Elgato Key Light control from camera activity
+ keylightd turns an Elgato Key Light on when a V4L2 camera produces frames,
+ chooses each light's brightness and colour temperature from ambient-light
+ calibration or a saved preset, and restores the previous power, brightness,
+ and colour temperature after capture stops.
+ .
+ A privileged camera monitor observes kernel V4L2 frame tracepoints and never
+ reads image contents; a per-user controller owns Key Light discovery and
+ control over the Elgato local HTTP API.
+
+Package: gnome-shell-extension-keylightd
+Section: gnome
+Architecture: all
+Depends:
+ keylightd (= ${binary:Version}),
+ gnome-shell (>= ${gnome:MinimumVersion}~),
+ gnome-shell (<< ${gnome:MaximumVersion}~),
+ ${misc:Depends},
+Recommends:
+ gnome-shell-extension-prefs,
+Description: GNOME Shell control surface for keylightd
+ A GNOME Shell extension that controls the Elgato Key Lights managed by
+ keylightd from the top bar. It shows a camera-state indicator and Quick
+ Settings sliders for each light's power, brightness, and colour temperature,
+ plus save and apply actions for the keylightd preset.
+ .
+ The indicator and its Quick Settings entries appear only while the keylightd
+ session service is available on the bus, and control is mediated entirely by
+ the per-user controller.

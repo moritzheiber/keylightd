@@ -9,7 +9,7 @@ use tracing::info;
 use ureq::Agent;
 
 use crate::config::{LightConfig, SelectedLight};
-use crate::domain::LogicalLightState;
+use crate::domain::{LogicalLightState, MIRED_MAX, MIRED_MIN};
 
 const SERVICE_TYPE: &str = "_elg._tcp.local.";
 
@@ -44,6 +44,7 @@ struct LightsResponse {
 struct ApiLight {
     on: u8,
     brightness: u8,
+    temperature: u16,
 }
 
 #[derive(Serialize)]
@@ -84,6 +85,7 @@ impl KeyLight {
             .map(|light| LogicalLightState {
                 on: light.on != 0,
                 brightness: light.brightness,
+                temperature: light.temperature,
             })
             .collect())
     }
@@ -98,6 +100,12 @@ impl KeyLight {
         {
             bail!("brightness must be between 1 and 100");
         }
+        if states
+            .iter()
+            .any(|state| !(MIRED_MIN..=MIRED_MAX).contains(&state.temperature))
+        {
+            bail!("colour temperature must be between {MIRED_MIN} and {MIRED_MAX} mired");
+        }
         let update = LightsUpdate {
             number_of_lights: states.len(),
             lights: states
@@ -105,6 +113,7 @@ impl KeyLight {
                 .map(|state| ApiLight {
                     on: u8::from(state.on),
                     brightness: state.brightness,
+                    temperature: state.temperature,
                 })
                 .collect(),
         };

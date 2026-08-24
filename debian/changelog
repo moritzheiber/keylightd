@@ -1,0 +1,11 @@
+keylightd (0.4.0) unstable; urgency=medium
+
+  * Added GNOME extension, resolved lock contention, reworked Debian package build
+
+ -- Moritz Heiber <moritz@heiber.im>  Mon, 24 Aug 2026 14:06:47 +0200
+
+keylightd (0.3.1) unstable; urgency=medium
+
+  * Package with debhelper as a native Debian source package.
+
+ -- Moritz Heiber <moritz@heiber.im>  Sat, 22 Aug 2026 14:03:41 +0000
