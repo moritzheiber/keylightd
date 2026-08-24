@@ -1,0 +1,92 @@
+name: APT repository
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apt-repo
+  cancel-in-progress: false
+
+env:
+  # Fingerprint of the keylightd archive signing key. The imported secret must
+  # match this, so an accidental key swap fails the build instead of silently
+  # republishing under a different key. Update this when rotating the key.
+  EXPECTED_FPR: "64C33EBB1F9FE944F27B19B6C4296BDAD3AC2EDB"
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install reprepro
+        run: sudo apt-get update && sudo apt-get install -y reprepro
+
+      - name: Download the latest release packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p incoming
+          tag="${{ github.event.release.tag_name }}"
+          if [ -z "$tag" ]; then
+            tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          fi
+          echo "Publishing release ${tag}"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir incoming
+          ls -l incoming
+
+      - name: Import the archive signing key
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+          echo "GNUPGHOME=${GNUPGHOME}" >> "$GITHUB_ENV"
+          printf '%s' "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+          fpr="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')"
+          [ -n "$fpr" ] || { echo "no signing key imported" >&2; exit 1; }
+          if [ "$fpr" != "$EXPECTED_FPR" ]; then
+            echo "imported key ${fpr} does not match expected ${EXPECTED_FPR}" >&2
+            exit 1
+          fi
+          echo "FPR=${fpr}" >> "$GITHUB_ENV"
+          echo "Imported ${fpr}"
+
+      - name: Build and sign the repository
+        run: |
+          set -euo pipefail
+          base="reprepro"
+          site="site"
+          mkdir -p "${base}/conf" "$site"
+          sed "s/@@FINGERPRINT@@/${FPR}/" packaging/apt/distributions > "${base}/conf/distributions"
+          reprepro -b "$base" includedeb resolute incoming/*.deb
+          cp -r "${base}/dists" "${base}/pool" "$site/"
+          gpg --export "$FPR" > "${site}/keylightd.gpg"
+          gpg --armor --export "$FPR" > "${site}/keylightd.asc"
+          url="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+          sed "s#@@REPO_URL@@#${url}#g" packaging/apt/keylightd.sources > "${site}/keylightd.sources"
+          sed -e "s#@@REPO_URL@@#${url}#g" -e "s/@@FINGERPRINT@@/${FPR}/g" \
+            packaging/apt/index.html > "${site}/index.html"
+          touch "${site}/.nojekyll"
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

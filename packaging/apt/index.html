@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>keylightd APT repository</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }
+  code, pre { font-family: ui-monospace, monospace; }
+  pre { background: #f4f4f4; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+  h1 { margin-bottom: 0.2rem; }
+  .sub { color: #666; margin-top: 0; }
+  .fpr { word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>keylightd APT repository</h1>
+<p class="sub">Ubuntu 26.04 (resolute), amd64 and arm64.</p>
+
+<p>Add the signing key and the source, then install:</p>
+
+<pre><code>curl -fsSL @@REPO_URL@@/keylightd.gpg | sudo tee /etc/apt/keyrings/keylightd.gpg &gt; /dev/null
+sudo curl -fsSL @@REPO_URL@@/keylightd.sources -o /etc/apt/sources.list.d/keylightd.sources
+sudo apt update
+sudo apt install keylightd
+</code></pre>
+
+<p>The desktop applet is packaged separately:</p>
+
+<pre><code>sudo apt install gnome-shell-extension-keylightd
+</code></pre>
+
+<h2>Verification</h2>
+<p>The repository index is signed by the keylightd archive key.</p>
+<p class="fpr">Fingerprint: <code>@@FINGERPRINT@@</code></p>
+<p>Key files: <a href="keylightd.gpg">keylightd.gpg</a> (binary keyring), <a href="keylightd.asc">keylightd.asc</a> (ASCII).</p>
+
+<p>Source: <a href="https://github.com/moritzheiber/keylightd">github.com/moritzheiber/keylightd</a></p>
+</body>
+</html>

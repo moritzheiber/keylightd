@@ -1,0 +1,8 @@
+Origin: keylightd
+Label: keylightd
+Codename: resolute
+Suite: resolute
+Architectures: amd64 arm64
+Components: main
+Description: keylightd APT repository for Ubuntu 26.04 (resolute)
+SignWith: @@FINGERPRINT@@

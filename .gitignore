@@ -2,6 +2,9 @@
 /dist
 /.deb-build.*
 /.inspect-*
+/.nested-test
+/.gnupg-aptkey
+/keylightd-archive-public.asc
 
 # debhelper build artifacts
 /debian/.debhelper/
