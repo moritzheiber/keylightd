@@ -53,7 +53,7 @@ jobs:
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
           mkdir -p "$GNUPGHOME"
           chmod 700 "$GNUPGHOME"
           echo "GNUPGHOME=${GNUPGHOME}" >> "$GITHUB_ENV"
