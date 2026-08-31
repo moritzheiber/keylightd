@@ -267,17 +267,23 @@ fn identify_endpoint(
     } else {
         bail!("accessory-info at {endpoint} has no stable hardware identity");
     };
-    let name = if info.display_name.trim().is_empty() {
-        info.product_name
-    } else {
-        info.display_name
-    };
+    let name = display_name(info.product_name, info.display_name);
     Ok(DiscoveredLight {
         id,
         name,
         service_name,
         endpoint: endpoint.to_owned(),
     })
+}
+
+/// The device's user-facing name is the mobile-app display name when set, and
+/// the product name otherwise.
+fn display_name(product_name: String, display_name: String) -> String {
+    if display_name.trim().is_empty() {
+        product_name
+    } else {
+        display_name
+    }
 }
 
 fn http_client() -> Agent {
@@ -309,6 +315,22 @@ fn normalize_endpoint(address: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_name_prefers_mobile_app_name() {
+        assert_eq!(
+            display_name("Elgato Key Light".to_owned(), "Desk".to_owned()),
+            "Desk"
+        );
+    }
+
+    #[test]
+    fn display_name_falls_back_to_product_when_blank() {
+        assert_eq!(
+            display_name("Elgato Key Light".to_owned(), "   ".to_owned()),
+            "Elgato Key Light"
+        );
+    }
 
     #[test]
     fn normalizes_configured_addresses() {

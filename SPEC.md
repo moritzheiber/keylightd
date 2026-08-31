@@ -314,7 +314,8 @@ Root methods operate on the whole selected set:
 
 Each selected logical light is exported as a child object at `/im/heiber/keylightd/light/<n>` implementing `im.heiber.keylightd1.Light`, so the extension renders one control row per light. Its properties are read-only and change-signalled:
 
-- `Id` (`s`), `Name` (`s`): stable identity and display name.
+- `Id` (`s`): stable hardware identity.
+- `Name` (`s`): the device display name. It tracks the mobile-app name, refreshed from the device on each poll, so renaming the light in the Elgato app updates the applet within one poll. The last known name is kept while the light is unreachable.
 - `On` (`b`): power state.
 - `Brightness` (`y`): brightness, 1 through 100.
 - `TemperatureKelvin` (`q`): color temperature in Kelvin, 2900 through 7000.

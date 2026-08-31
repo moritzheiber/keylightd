@@ -88,11 +88,7 @@ impl Root {
 struct Light {
     index: usize,
     id: String,
-    name: String,
-    on: bool,
-    brightness: u8,
-    temperature_kelvin: u16,
-    reachable: bool,
+    state: LightState,
     commands: Mutex<Sender<ManualCommand>>,
 }
 
@@ -105,27 +101,27 @@ impl Light {
 
     #[zbus(property)]
     fn name(&self) -> String {
-        self.name.clone()
+        self.state.name.clone()
     }
 
     #[zbus(property)]
     fn on(&self) -> bool {
-        self.on
+        self.state.on
     }
 
     #[zbus(property)]
     fn brightness(&self) -> u8 {
-        self.brightness
+        self.state.brightness
     }
 
     #[zbus(property)]
     fn temperature_kelvin(&self) -> u16 {
-        self.temperature_kelvin
+        self.state.temperature_kelvin
     }
 
     #[zbus(property)]
     fn reachable(&self) -> bool {
-        self.reachable
+        self.state.reachable
     }
 
     fn set_power(&self, on: bool) {
@@ -188,10 +184,23 @@ impl Light {
 
 /// Read-only view of a light's current state for the applet.
 struct LightView {
+    name: String,
     on: bool,
     brightness: u8,
     temperature_kelvin: u16,
     reachable: bool,
+}
+
+impl LightView {
+    fn unreachable() -> Self {
+        LightView {
+            name: String::new(),
+            on: false,
+            brightness: 0,
+            temperature_kelvin: 0,
+            reachable: false,
+        }
+    }
 }
 
 fn poll_light(config: &LightConfig, selection: &SelectedLight) -> LightView {
@@ -200,27 +209,90 @@ fn poll_light(config: &LightConfig, selection: &SelectedLight) -> LightView {
         .into_iter()
         .next()
         .and_then(|(_, light)| light.ok());
-    match outcome.and_then(|light| light.states().ok()) {
-        Some(states) => match states.first() {
+    let Some(light) = outcome else {
+        return LightView::unreachable();
+    };
+    // accessory-info was fetched fresh while resolving, so this reflects the
+    // current mobile-app display name, letting a rename surface on the next poll.
+    let name = light.discovered().name.clone();
+    match light.states() {
+        Ok(states) => match states.first() {
             Some(state) => LightView {
+                name,
                 on: state.on,
                 brightness: state.brightness,
                 temperature_kelvin: mired_to_kelvin(state.temperature),
                 reachable: true,
             },
-            None => LightView {
-                on: false,
-                brightness: 0,
-                temperature_kelvin: 0,
-                reachable: false,
-            },
+            None => LightView::unreachable(),
         },
-        None => LightView {
-            on: false,
-            brightness: 0,
-            temperature_kelvin: 0,
-            reachable: false,
-        },
+        Err(_) => LightView::unreachable(),
+    }
+}
+
+/// The subset of a light's published properties that mirror the live device, and
+/// which the applet observes through `PropertiesChanged`. Kept separate from the
+/// D-Bus interface so the reconciliation policy is unit-testable without a bus.
+#[derive(Default)]
+struct LightState {
+    name: String,
+    on: bool,
+    brightness: u8,
+    temperature_kelvin: u16,
+    reachable: bool,
+}
+
+/// Which properties changed during a `reconcile`, so the caller emits only the
+/// corresponding `PropertiesChanged` signals.
+#[derive(Default, Debug, PartialEq, Eq)]
+struct LightChanges {
+    name: bool,
+    on: bool,
+    brightness: bool,
+    temperature_kelvin: bool,
+    reachable: bool,
+}
+
+impl LightChanges {
+    #[cfg(test)]
+    fn any(&self) -> bool {
+        self.name || self.on || self.brightness || self.temperature_kelvin || self.reachable
+    }
+}
+
+impl LightState {
+    /// Update toward the polled view, returning which properties changed. When
+    /// the light is unreachable only reachability is updated; the last-known
+    /// name, power, brightness, and temperature are preserved so the applet does
+    /// not flicker to placeholder values while the device is briefly absent.
+    fn reconcile(&mut self, view: &LightView) -> LightChanges {
+        let mut changes = LightChanges::default();
+        if self.reachable != view.reachable {
+            self.reachable = view.reachable;
+            changes.reachable = true;
+        }
+        // While unreachable the view carries no live values, so keep the last
+        // known name, power, brightness, and temperature.
+        if !view.reachable {
+            return changes;
+        }
+        if self.name != view.name {
+            self.name = view.name.clone();
+            changes.name = true;
+        }
+        if self.on != view.on {
+            self.on = view.on;
+            changes.on = true;
+        }
+        if self.brightness != view.brightness {
+            self.brightness = view.brightness;
+            changes.brightness = true;
+        }
+        if self.temperature_kelvin != view.temperature_kelvin {
+            self.temperature_kelvin = view.temperature_kelvin;
+            changes.temperature_kelvin = true;
+        }
+        changes
     }
 }
 
@@ -264,11 +336,10 @@ pub fn serve(
                 Light {
                     index,
                     id: selection.id.clone(),
-                    name: selection.name.clone(),
-                    on: false,
-                    brightness: 0,
-                    temperature_kelvin: 0,
-                    reachable: false,
+                    state: LightState {
+                        name: selection.name.clone(),
+                        ..Default::default()
+                    },
                     commands: Mutex::new(commands.clone()),
                 },
             )
@@ -324,23 +395,20 @@ fn publish_light(server: &zbus::blocking::ObjectServer, path: &str, view: &Light
         }
     };
     let mut iface = light.get_mut();
-    if iface.reachable != view.reachable {
-        iface.reachable = view.reachable;
+    let changes = iface.state.reconcile(view);
+    if changes.reachable {
         let _ = zbus::block_on(iface.reachable_changed(light.signal_emitter()));
     }
-    if !view.reachable {
-        return;
+    if changes.name {
+        let _ = zbus::block_on(iface.name_changed(light.signal_emitter()));
     }
-    if iface.on != view.on {
-        iface.on = view.on;
+    if changes.on {
         let _ = zbus::block_on(iface.on_changed(light.signal_emitter()));
     }
-    if iface.brightness != view.brightness {
-        iface.brightness = view.brightness;
+    if changes.brightness {
         let _ = zbus::block_on(iface.brightness_changed(light.signal_emitter()));
     }
-    if iface.temperature_kelvin != view.temperature_kelvin {
-        iface.temperature_kelvin = view.temperature_kelvin;
+    if changes.temperature_kelvin {
         let _ = zbus::block_on(iface.temperature_kelvin_changed(light.signal_emitter()));
     }
 }
@@ -360,4 +428,90 @@ pub fn spawn(
         }
     });
     receiver
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reachable_view(name: &str, on: bool, brightness: u8, kelvin: u16) -> LightView {
+        LightView {
+            name: name.to_owned(),
+            on,
+            brightness,
+            temperature_kelvin: kelvin,
+            reachable: true,
+        }
+    }
+
+    #[test]
+    fn reconcile_reports_every_initial_field_as_changed() {
+        let mut state = LightState::default();
+        let changes = state.reconcile(&reachable_view("Key", true, 60, 5000));
+        assert_eq!(
+            changes,
+            LightChanges {
+                name: true,
+                on: true,
+                brightness: true,
+                temperature_kelvin: true,
+                reachable: true,
+            }
+        );
+        assert_eq!(state.name, "Key");
+        assert!(state.on);
+        assert_eq!(state.brightness, 60);
+        assert_eq!(state.temperature_kelvin, 5000);
+        assert!(state.reachable);
+    }
+
+    #[test]
+    fn reconcile_reports_nothing_when_unchanged() {
+        let mut state = LightState::default();
+        state.reconcile(&reachable_view("Key", true, 60, 5000));
+        let changes = state.reconcile(&reachable_view("Key", true, 60, 5000));
+        assert!(!changes.any());
+    }
+
+    #[test]
+    fn reconcile_surfaces_a_rename() {
+        let mut state = LightState::default();
+        state.reconcile(&reachable_view("Old", true, 60, 5000));
+        let changes = state.reconcile(&reachable_view("New", true, 60, 5000));
+        assert_eq!(
+            changes,
+            LightChanges {
+                name: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(state.name, "New");
+    }
+
+    #[test]
+    fn reconcile_preserves_last_known_values_when_unreachable() {
+        let mut state = LightState::default();
+        state.reconcile(&reachable_view("Key", true, 60, 5000));
+        let changes = state.reconcile(&LightView::unreachable());
+        assert_eq!(
+            changes,
+            LightChanges {
+                reachable: true,
+                ..Default::default()
+            }
+        );
+        assert!(!state.reachable);
+        assert_eq!(state.name, "Key");
+        assert!(state.on);
+        assert_eq!(state.brightness, 60);
+        assert_eq!(state.temperature_kelvin, 5000);
+    }
+
+    #[test]
+    fn reconcile_does_not_rename_to_empty_while_unreachable() {
+        let mut state = LightState::default();
+        state.reconcile(&reachable_view("Key", true, 60, 5000));
+        state.reconcile(&LightView::unreachable());
+        assert_eq!(state.name, "Key");
+    }
 }
