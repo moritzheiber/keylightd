@@ -1,6 +1,6 @@
 [package]
 name = "keylightd"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["Moritz Heiber <moritz@heiber.im>"]
 description = "Automatic Elgato Key Light control based on camera activity and ambient light"

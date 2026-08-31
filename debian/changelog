@@ -1,3 +1,9 @@
+keylightd (0.5.0) unstable; urgency=medium
+
+  * Add light name support
+
+ -- Moritz Heiber <moritz@heiber.im>  Mon, 31 Aug 2026 20:57:27 +0200
+
 keylightd (0.4.0) unstable; urgency=medium
 
   * Added GNOME extension, resolved lock contention, reworked Debian package build
