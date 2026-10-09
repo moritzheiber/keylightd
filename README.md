@@ -99,7 +99,7 @@ scripts/bump-version.sh
 
 ### APT repository
 
-The `apt-repo.yml` workflow publishes the signed APT repository to GitHub Pages at `https://moritzheiber.github.io/keylightd`. It runs on every published release and on manual dispatch. It downloads the release `.deb` assets, builds a `resolute` archive for amd64 and arm64 with `reprepro`, signs the `Release` with the archive key, and deploys the result to Pages. The build is stateless and serves only the latest release, so a re-run fully reconstructs the site.
+The `apt-repo.yml` workflow publishes the signed APT repository to GitHub Pages at `https://moritzheiber.github.io/keylightd`. It runs after the Release workflow completes and on manual dispatch. It downloads the latest release `.deb` assets, builds a `resolute` archive for amd64 and arm64 with `reprepro`, signs the `Release` with the archive key, and deploys the result to Pages. The build is stateless and serves only the latest release, so a re-run fully reconstructs the site.
 
 One-time setup:
 

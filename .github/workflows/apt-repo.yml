@@ -1,8 +1,13 @@
 name: APT repository
 
 on:
-  release:
-    types: [published]
+  # The Release workflow publishes each release with GITHUB_TOKEN, and a
+  # release event triggered by GITHUB_TOKEN does not start another workflow.
+  # Chain off the Release run instead: it is started by the tag push, so this
+  # fires normally once the packages are built and attached.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +25,9 @@ env:
 
 jobs:
   publish:
+    # Only publish for a manual run or a successful Release run; skip when the
+    # Release workflow failed so a broken build is never republished.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -40,10 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p incoming
-          tag="${{ github.event.release.tag_name }}"
-          if [ -z "$tag" ]; then
-            tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
-          fi
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
           echo "Publishing release ${tag}"
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir incoming
           ls -l incoming
